@@ -5,10 +5,11 @@
 // URL Google Sheet yang dipublish sebagai CSV
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRxmI-osn5Oq2XBN8igHn5RpcxyFlhU7E02VtUgV3CLrLjrTiG09LfaC9jvXIpPUeQgGP22IW2eT5WZ/pub?gid=408991878&single=true&output=csv';
 
-// CORS Proxy fallback — digunakan jika koneksi direct mengalami kendala
+// CORS Proxy fallback — digunakan saat membuka dari file:// lokal
 const CORS_PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
   url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`
+  url => `https://cors-anywhere.herokuapp.com/${url}`,
 ];
 
 // ===== CHART.JS DEFAULTS =====
@@ -103,81 +104,69 @@ function navigateTo(section) {
   currentPageTitle.textContent = titles[section] || section;
 }
 
-// ===== DATA LOADING (FIXED FOR LOCAL FILE:// & ONLINE) =====
+// ===== DATA LOADING =====
+// Strategi: coba langsung → jika gagal (CORS file://), coba proxy satu per satu
 async function loadData() {
   showLoading(true);
   refreshBtn.classList.add('spinning');
 
-  const cacheBuster = `&_cb=${new Date().getTime()}`;
-  const targetUrl = SHEET_CSV_URL + cacheBuster;
+  const isLocal = location.protocol === 'file:';
 
-  // Selalu taruh targetUrl (direct) di urutan pertama, baru proxy sebagai cadangan terakhir
-  const urlsToTry = [
-    targetUrl,
-    ...CORS_PROXIES.map(fn => fn(targetUrl))
-  ];
+  // Buat daftar URL yang akan dicoba: direct dulu, lalu masing-masing proxy
+  const urlsToTry = isLocal
+    ? CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))
+    : [SHEET_CSV_URL, ...CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))];
 
   for (let i = 0; i < urlsToTry.length; i++) {
     const url = urlsToTry[i];
     try {
-      // Menggunakan native fetch yang jauh lebih bersahabat dengan CORS file:// daripada Papa.parse(url) langsung
-      const response = await fetch(url, { method: 'GET' });
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
-      const csvText = await response.text();
-      if (!csvText || csvText.trim() === '') throw new Error('Data teks CSV kosong');
-
-      // Parsing data menggunakan Papa.parse dari teks string lokal
-      const results = Papa.parse(csvText, {
-        header: true,
-        skipEmptyLines: true
+      await new Promise((resolve, reject) => {
+        Papa.parse(url, {
+          download: true,
+          header: true,
+          skipEmptyLines: true,
+          complete(results) {
+            const rows = results.data.filter(r => r.Id && r.Id.trim() !== '');
+            if (rows.length === 0) { reject(new Error('Empty result')); return; }
+            allData = rows;
+            showLoading(false);
+            refreshBtn.classList.remove('spinning');
+            lastUpdateEl.textContent = 'Update: ' + new Date().toLocaleTimeString('id-ID');
+            // Tampilkan indikator sumber data
+            document.querySelector('.ds-val').textContent =
+              i === 0 && !isLocal ? 'Google Sheets ✓' : `Via Proxy ${i} ✓`;
+            populateFilters();
+            applyGlobalFilters();
+            resolve();
+          },
+          error(err) { reject(err); }
+        });
       });
-
-      const rows = results.data.filter(r => r.Id && r.Id.trim() !== '');
-      if (rows.length === 0) throw new Error('Format baris data tidak sesuai');
-
-      // JIKA BERHASIL:
-      allData = rows;
-      showLoading(false);
-      refreshBtn.classList.remove('spinning');
-      lastUpdateEl.textContent = 'Update: ' + new Date().toLocaleTimeString('id-ID');
-      
-      // Sembunyikan layar error jika sebelumnya sempat muncul
-      loadingOverlay.classList.add('hidden');
-      
-      // Tampilkan indikator asal data sukses jika elemennya tersedia
-      const dsValEl = document.querySelector('.ds-val');
-      if (dsValEl) {
-        dsValEl.textContent = i === 0 ? 'Google Sheets Direct ✓' : `Via Proxy ${i} ✓`;
-      }
-      
-      populateFilters();
-      applyGlobalFilters();
-      return; 
+      return; // Berhasil, keluar dari loop
     } catch (err) {
-      console.warn(`Jalur pencarian ke-${i + 1} gagal:`, err.message);
+      console.warn(`URL ke-${i + 1} gagal:`, url, err.message);
+      if (i === urlsToTry.length - 1) {
+        // Semua gagal
+        showLoading(false);
+        refreshBtn.classList.remove('spinning');
+        document.getElementById('loadingOverlay').classList.remove('hidden');
+        document.getElementById('loadingOverlay').innerHTML = `
+          <div style="text-align:center;padding:32px;max-width:480px">
+            <div style="font-size:2.5rem;margin-bottom:16px">⚠️</div>
+            <h3 style="color:#f43f5e;margin-bottom:8px">Gagal Memuat Data</h3>
+            <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:20px">
+              Browser memblokir akses ke Google Sheets saat dibuka dari <code style="background:#1a2235;padding:2px 6px;border-radius:4px">file://</code>.<br><br>
+              <strong style="color:#f1f5f9">Solusi Tercepat:</strong><br>
+              Upload folder ke <a href="https://app.netlify.com/drop" target="_blank" style="color:#6366f1">Netlify Drop</a> — gratis, drag & drop, online dalam 30 detik.
+            </p>
+            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+              <button onclick="loadData()" style="padding:9px 20px;background:#6366f1;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">↻ Coba Lagi</button>
+              <a href="https://app.netlify.com/drop" target="_blank" style="padding:9px 20px;background:#10b981;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;text-decoration:none">🚀 Buka Netlify Drop</a>
+            </div>
+          </div>`;
+      }
     }
   }
-
-  // JIKA SEMUA JALUR GAGAL TOTAL:
-  showLoading(false);
-  refreshBtn.classList.remove('spinning');
-  loadingOverlay.classList.remove('hidden');
-  loadingOverlay.innerHTML = `
-    <div style="text-align:center;padding:32px;max-width:480px;background:#111827;border-radius:12px;border:1px solid rgba(255,255,255,0.1);box-shadow:0 10px 25px rgba(0,0,0,0.5)">
-      <div style="font-size:2.5rem;margin-bottom:16px">⚠️</div>
-      <h3 style="color:#f43f5e;margin-bottom:8px">Gagal Memuat Data</h3>
-      <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:20px;line-height:1.6;text-align:left">
-        Seluruh jalur koneksi data diblokir oleh browser atau server mengalami gangguan.<br><br>
-        Jika Anda membuka halaman ini lewat <code style="background:#1a2235;padding:2px 6px;border-radius:4px">file://</code> (klik dua kali file lokal), pastikan komputer Anda terkoneksi internet.<br><br>
-        <strong style="color:#f1f5f9">Solusi Tercepat & Pasti Berhasil:</strong><br>
-        1. Gunakan ekstensi <strong style="color:#6366f1">Live Server</strong> di VS Code (klik kanan index.html -> Open with Live Server).<br>
-        2. Atau upload folder ini ke <a href="https://app.netlify.com/drop" target="_blank" style="color:#6366f1;text-decoration:underline">Netlify Drop</a> / GitHub Pages agar berjalan via protokol online (<code style="background:#1a2235;padding:2px 6px;border-radius:4px">https://</code>).
-      </p>
-      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-        <button onclick="location.reload()" style="padding:10px 20px;background:#6366f1;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">↻ Muat Ulang Halaman</button>
-      </div>
-    </div>`;
 }
 
 function showLoading(show) {
@@ -248,14 +237,20 @@ function parseSLA(val) {
 }
 
 function getStatusBadge(status) {
-  const s = (status || '').toLowerCase().trim();
-  const validStatuses = ['resolved', 'assigned', 'acknowledged', 'feedback', 'open'];
-  const cls = validStatuses.includes(s) ? s : 'open';
-  return `<span class="badge badge-${cls}">${status || 'Open'}</span>`;
+  const s = (status || '').toLowerCase();
+  const map = {
+    resolved: 'resolved',
+    assigned: 'assigned',
+    acknowledged: 'acknowledged',
+    feedback: 'feedback',
+    open: 'open',
+  };
+  const cls = map[s] || 'open';
+  return `<span class="badge badge-${cls}">${status}</span>`;
 }
 
 function getRootCauseBadge(rc) {
-  const s = (rc || '').toLowerCase().trim();
+  const s = (rc || '').toLowerCase();
   const cls = s === 'system' ? 'system' : s === 'people' ? 'people' : s === 'process' ? 'process' : 'open';
   return rc ? `<span class="badge badge-${cls}">${rc}</span>` : '<span class="badge badge-open">-</span>';
 }
@@ -291,8 +286,8 @@ function destroyChart(name) {
 // ===== KPI SECTION =====
 function renderKPIs() {
   const total = filteredData.length;
-  const resolved = filteredData.filter(r => (r.Status || '').toLowerCase().trim() === 'resolved').length;
-  const open = total - resolved;
+  const resolved = filteredData.filter(r => r.Status === 'resolved').length;
+  const open = filteredData.filter(r => r.Status !== 'resolved').length;
 
   const slaVals = filteredData
     .map(r => parseSLA(r.SLA))
@@ -315,8 +310,8 @@ function renderTrendChart() {
   months.sort((a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b));
 
   const totalByMonth = months.map(m => filteredData.filter(r => r.Month === m).length);
-  const resolvedByMonth = months.map(m => filteredData.filter(r => r.Month === m && (r.Status || '').toLowerCase().trim() === 'resolved').length);
-  const openByMonth = months.map(m => filteredData.filter(r => r.Month === m && (r.Status || '').toLowerCase().trim() !== 'resolved').length);
+  const resolvedByMonth = months.map(m => filteredData.filter(r => r.Month === m && r.Status === 'resolved').length);
+  const openByMonth = months.map(m => filteredData.filter(r => r.Month === m && r.Status !== 'resolved').length);
 
   destroyChart('trend');
   const ctx = document.getElementById('trendChart').getContext('2d');
@@ -485,7 +480,7 @@ function renderProductChart() {
 
 // ===== SLA SECTION =====
 function renderSLASection() {
-  const resolved = filteredData.filter(r => (r.Status || '').toLowerCase().trim() === 'resolved');
+  const resolved = filteredData.filter(r => r.Status === 'resolved');
   const withSLA = resolved.filter(r => parseSLA(r.SLA) !== null);
   const onProgress = filteredData.filter(r => r.SLA === 'on progress').length;
 
@@ -795,11 +790,11 @@ function renderBranchRC(top10Labels) {
 // ===== TABLE =====
 function renderTable() {
   const search = tableSearchEl.value.toLowerCase();
-  const status = tableStatusEl.value.toLowerCase().trim();
+  const status = tableStatusEl.value.toLowerCase();
   const rootCause = tableRootCauseEl.value;
 
   let rows = filteredData.filter(r => {
-    if (status && (r.Status || '').toLowerCase().trim() !== status) return false;
+    if (status && (r.Status || '').toLowerCase() !== status) return false;
     if (rootCause && r['Root Cause'] !== rootCause) return false;
     if (search) {
       const combined = [r.Id, r.Summary, r['Branch Name'], r.Category, r['Product Source'], r['Assigned To']].join(' ').toLowerCase();
