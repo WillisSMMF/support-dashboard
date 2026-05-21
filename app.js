@@ -1,540 +1,878 @@
-/* ==========================================================================
-   MANTIS DASHBOARD ENGINE CORE LOGIC
-   ========================================================================== */
+/* ==========================================
+   MANTIS DASHBOARD - APP LOGIC
+   ========================================== */
 
 // URL Google Sheet yang dipublish sebagai CSV
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRxmI-osn5Oq2XBN8igHn5RpcxyFlhU7E02VtUgV3CLrLjrTiG09LfaC9jvXIpPUeQgGP22IW2eT5WZ/pub?gid=408991878&single=true&output=csv';
 
-// Global Memory State Variables
-let masterTickets = [];
-let filteredTickets = [];
-let activeCharts = {};
+// CORS Proxy fallback — digunakan saat membuka dari file:// lokal
+const CORS_PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://cors-anywhere.herokuapp.com/${url}`,
+];
 
-// Pagination & Sort States
+// ===== CHART.JS DEFAULTS =====
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+Chart.defaults.font.family = 'Inter, sans-serif';
+Chart.defaults.plugins.legend.labels.usePointStyle = true;
+Chart.defaults.plugins.legend.labels.pointStyleWidth = 8;
+Chart.defaults.plugins.tooltip.backgroundColor = '#1a2235';
+Chart.defaults.plugins.tooltip.borderColor = 'rgba(255,255,255,0.1)';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.padding = 10;
+Chart.defaults.plugins.tooltip.titleColor = '#f1f5f9';
+Chart.defaults.plugins.tooltip.bodyColor = '#94a3b8';
+Chart.defaults.plugins.tooltip.cornerRadius = 8;
+
+const PALETTE = {
+  primary:   '#6366f1',
+  secondary: '#8b5cf6',
+  cyan:      '#22d3ee',
+  emerald:   '#10b981',
+  amber:     '#f59e0b',
+  rose:      '#f43f5e',
+  sky:       '#38bdf8',
+  lime:      '#a3e635',
+  orange:    '#fb923c',
+  pink:      '#f472b6',
+};
+
+const MULTI = [
+  '#6366f1','#22d3ee','#10b981','#f59e0b','#f43f5e',
+  '#8b5cf6','#38bdf8','#a3e635','#fb923c','#f472b6',
+  '#4ade80','#facc15','#60a5fa','#c084fc','#34d399',
+  '#fca5a5','#6ee7b7','#93c5fd','#fbbf24','#a78bfa',
+];
+
+// ===== STATE =====
+let allData = [];
+let filteredData = [];
+let charts = {};
 let currentPage = 1;
-const rowsPerPage = 12;
-let sortColumn = 'id';
-let sortDirection = 'desc';
+const PAGE_SIZE = 20;
+let sortCol = 'Date Submitted';
+let sortDir = 'desc';
+let tableFilter = { search: '', status: '', rootCause: '' };
 
-// Chart Theme Palette Colors
-const chartColors = ['#6366f1', '#8b5cf6', '#22d3ee', '#10b981', '#f59e0b', '#f43f5e', '#ec4899', '#3b82f6', '#14b8a6', '#a855f7'];
+// ===== DOM REFERENCES =====
+const loadingOverlay  = document.getElementById('loadingOverlay');
+const refreshBtn      = document.getElementById('refreshBtn');
+const filterMonth     = document.getElementById('filterMonth');
+const filterProduct   = document.getElementById('filterProduct');
+const lastUpdateEl    = document.getElementById('lastUpdate');
+const tableSearchEl   = document.getElementById('tableSearch');
+const tableStatusEl   = document.getElementById('tableStatus');
+const tableRootCauseEl= document.getElementById('tableRootCause');
+const tableCountEl    = document.getElementById('tableCount');
+const tableBodyEl     = document.getElementById('ticketTableBody');
+const paginationEl    = document.getElementById('pagination');
+const sidebarEl       = document.getElementById('sidebar');
+const mainEl          = document.getElementById('main');
+const sidebarToggleEl = document.getElementById('sidebarToggle');
+const mobileMenuBtn   = document.getElementById('mobileMenuBtn');
+const currentPageTitle= document.getElementById('currentPageTitle');
 
-document.addEventListener('DOMContentLoaded', () => {
-  setupTabNavigation();
-  fetchSpreadsheetData();
+// ===== SIDEBAR =====
+sidebarToggleEl.addEventListener('click', () => {
+  sidebarEl.classList.toggle('collapsed');
+  mainEl.classList.toggle('sidebar-collapsed');
 });
 
-// Setup Mekanisme Tab SPA Navigation
-function setupTabNavigation() {
-  document.querySelectorAll('.menu-item').forEach(button => {
-    button.addEventListener('click', () => {
-      document.querySelectorAll('.menu-item').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.dashboard-section').forEach(sec => sec.classList.remove('active'));
-      
-      button.classList.add('active');
-      const targetSection = button.dataset.section;
-      document.getElementById(`section-${targetSection}`).classList.add('active');
-      
-      // Update Header Text Topbar
-      document.getElementById('pageTitle').innerText = button.innerText.substring(3);
-      
-      // Render Charts Khusus Setiap Tab Aktif demi Performa Rendering
-      triggerSectionSpecificRender(targetSection);
-    });
+mobileMenuBtn.addEventListener('click', () => {
+  sidebarEl.classList.toggle('mobile-open');
+});
+
+// ===== NAVIGATION =====
+const navItems = document.querySelectorAll('.nav-item');
+navItems.forEach(item => {
+  item.addEventListener('click', e => {
+    e.preventDefault();
+    const section = item.dataset.section;
+    navigateTo(section);
+    sidebarEl.classList.remove('mobile-open');
   });
+});
+
+function navigateTo(section) {
+  navItems.forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.getElementById(`nav-${section}`).classList.add('active');
+  document.getElementById(`section-${section}`).classList.add('active');
+  const titles = { overview: 'Overview', tickets: 'Daftar Tiket', sla: 'Analisis SLA', branch: 'Analisis Cabang' };
+  currentPageTitle.textContent = titles[section] || section;
 }
 
-// Fetch dan Parsing Data Google Sheets (PapaParse Engine)
-function fetchSpreadsheetData() {
-  const statusBadge = document.getElementById('loadStatus');
-  statusBadge.className = 'status-badge loading';
-  statusBadge.innerText = 'Memuat Data...';
+// ===== DATA LOADING =====
+// Strategi: coba langsung → jika gagal (CORS file://), coba proxy satu per satu
+async function loadData() {
+  showLoading(true);
+  refreshBtn.classList.add('spinning');
 
-  Papa.parse(SHEET_CSV_URL, {
-    download: true,
-    header: true,
-    skipEmptyLines: true,
-    complete: function(results) {
-      if (results.data && results.data.length > 0) {
-        masterTickets = normalizeData(results.data);
-        filteredTickets = [...masterTickets];
-        
-        statusBadge.className = 'status-badge success';
-        statusBadge.innerText = '⚡ Terhubung';
-        
-        // Populate Dropdowns Filter Utama
-        populateFilterDropdowns();
-        
-        // Render Awal Section Overview
-        triggerSectionSpecificRender('overview');
-      } else {
-        showLoadingError();
-      }
-    },
-    error: function() {
-      showLoadingError();
-    }
-  });
-}
+  const isLocal = location.protocol === 'file:';
 
-function refreshData() {
-  fetchSpreadsheetData();
-}
+  // Buat daftar URL yang akan dicoba: direct dulu, lalu masing-masing proxy
+  const urlsToTry = isLocal
+    ? CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))
+    : [SHEET_CSV_URL, ...CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))];
 
-function showLoadingError() {
-  const statusBadge = document.getElementById('loadStatus');
-  statusBadge.className = 'status-badge text-danger';
-  statusBadge.innerText = '❌ Gagal Sync';
-}
-
-// Data Normalization Engine (Mengamankan anomali beda struktur header kolom)
-function normalizeData(rawData) {
-  return rawData.map((row, index) => {
-    const findValue = (possibleHeaders) => {
-      for (let header of possibleHeaders) {
-        if (row[header] !== undefined) return row[header].trim();
-        // Fallback case-insensitive
-        let foundKey = Object.keys(row).find(k => k.toLowerCase().trim() === header.toLowerCase().trim());
-        if (foundKey) return row[foundKey].trim();
-      }
-      return '';
-    };
-
-    let id = findValue(['Id', 'Ticket Id']) || `T-${1000 + index}`;
-    let status = findValue(['Status']) || 'open';
-    let rootCause = findValue(['Root Cause', 'RootCause', 'Root_Cause']) || 'Unassigned';
-    let category = findValue(['Category', 'Kategori']) || 'Others';
-    let product = findValue(['Product Source', 'Issued Product', 'Product']) || 'Mufins';
-    let branch = findValue(['Branch Name', 'Branch', 'Cabang']) || 'KPNO';
-    
-    let slaVal = findValue(['SLA', 'Sla Days']);
-    let sla = slaVal !== '' ? parseFloat(slaVal) : 0;
-    if (isNaN(sla)) sla = 0;
-
-    let summary = findValue(['Summary', 'Ringkasan']) || '-';
-    let assignee = findValue(['Assigned To', 'AssignedTo']) || 'Unassigned';
-    let dateSubmitted = findValue(['Date Submitted', 'DateSubmitted', 'Tanggal']);
-
-    // Manajemen Parsing Nama Bulan Tren
-    let month = findValue(['Month', 'Months', 'Month_DD_Name', 'Month_Name']);
-    if (!month && dateSubmitted) {
-      const d = new Date(dateSubmitted);
-      if (!isNaN(d.getTime())) {
-        const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agt", "Sep", "Okt", "Nov", "Des"];
-        month = `${months[d.getMonth()]} ${d.getFullYear()}`;
+  for (let i = 0; i < urlsToTry.length; i++) {
+    const url = urlsToTry[i];
+    try {
+      await new Promise((resolve, reject) => {
+        Papa.parse(url, {
+          download: true,
+          header: true,
+          skipEmptyLines: true,
+          complete(results) {
+            const rows = results.data.filter(r => r.Id && r.Id.trim() !== '');
+            if (rows.length === 0) { reject(new Error('Empty result')); return; }
+            allData = rows;
+            showLoading(false);
+            refreshBtn.classList.remove('spinning');
+            lastUpdateEl.textContent = 'Update: ' + new Date().toLocaleTimeString('id-ID');
+            // Tampilkan indikator sumber data
+            document.querySelector('.ds-val').textContent =
+              i === 0 && !isLocal ? 'Google Sheets ✓' : `Via Proxy ${i} ✓`;
+            populateFilters();
+            applyGlobalFilters();
+            resolve();
+          },
+          error(err) { reject(err); }
+        });
+      });
+      return; // Berhasil, keluar dari loop
+    } catch (err) {
+      console.warn(`URL ke-${i + 1} gagal:`, url, err.message);
+      if (i === urlsToTry.length - 1) {
+        // Semua gagal
+        showLoading(false);
+        refreshBtn.classList.remove('spinning');
+        document.getElementById('loadingOverlay').classList.remove('hidden');
+        document.getElementById('loadingOverlay').innerHTML = `
+          <div style="text-align:center;padding:32px;max-width:480px">
+            <div style="font-size:2.5rem;margin-bottom:16px">⚠️</div>
+            <h3 style="color:#f43f5e;margin-bottom:8px">Gagal Memuat Data</h3>
+            <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:20px">
+              Browser memblokir akses ke Google Sheets saat dibuka dari <code style="background:#1a2235;padding:2px 6px;border-radius:4px">file://</code>.<br><br>
+              <strong style="color:#f1f5f9">Solusi Tercepat:</strong><br>
+              Upload folder ke <a href="https://app.netlify.com/drop" target="_blank" style="color:#6366f1">Netlify Drop</a> — gratis, drag & drop, online dalam 30 detik.
+            </p>
+            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+              <button onclick="loadData()" style="padding:9px 20px;background:#6366f1;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">↻ Coba Lagi</button>
+              <a href="https://app.netlify.com/drop" target="_blank" style="padding:9px 20px;background:#10b981;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;text-decoration:none">🚀 Buka Netlify Drop</a>
+            </div>
+          </div>`;
       }
     }
-    if (!month || month === '0' || month === '') month = 'Lain-lain';
-
-    return { id, status, rootCause, category, product, branch, sla, summary, assignee, month };
-  });
-}
-
-// Sinkronisasi Penghancuran Canvas Lama (Anti Chart-Overlap Bug)
-function createCleanChart(canvasId, config) {
-  if (activeCharts[canvasId]) {
-    activeCharts[canvasId].destroy();
-  }
-  const ctx = document.getElementById(canvasId).getContext('2d');
-  activeCharts[canvasId] = new Chart(ctx, config);
-}
-
-// Router Trigger Rendering Berdasarkan Section Tab Aktif
-function triggerSectionSpecificRender(section) {
-  if (masterTickets.length === 0) return;
-  
-  switch(section) {
-    case 'overview':
-      renderOverviewKPIs();
-      renderOverviewCharts();
-      break;
-    case 'tiket':
-      currentPage = 1;
-      renderTicketTable();
-      break;
-    case 'sla':
-      renderSlaKPIs();
-      renderSlaCharts();
-      break;
-    case 'cabang':
-      renderCabangSection();
-      break;
   }
 }
 
-// Populate Dropdown Filter Tabel & Cabang
-function populateFilterDropdowns() {
-  const statuses = [...new Set(masterTickets.map(t => t.status))].filter(Boolean);
-  const rootCauses = [...new Set(masterTickets.map(t => t.rootCause))].filter(Boolean);
-  const branches = [...new Set(masterTickets.map(t => t.branch))].filter(Boolean).sort();
-
-  // Populate Status Filter
-  const fStatus = document.getElementById('filterStatus');
-  fStatus.innerHTML = '<option value="">Semua Status</option>';
-  statuses.forEach(s => fStatus.innerHTML += `<option value="${s}">${s.toUpperCase()}</option>`);
-
-  // Populate Root Cause Filter
-  const fRc = document.getElementById('filterRootCause');
-  fRc.innerHTML = '<option value="">Semua Root Cause</option>';
-  rootCauses.forEach(rc => fRc.innerHTML += `<option value="${rc}">${rc}</option>`);
-
-  // Populate Branch dropdown Analisis Lanjutan
-  const bSelect = document.getElementById('branchSelect');
-  bSelect.innerHTML = '<option value="ALL">Semua Cabang (Kumulatif)</option>';
-  branches.forEach(b => bSelect.innerHTML += `<option value="${b}">${b}</option>`);
+function showLoading(show) {
+  loadingOverlay.classList.toggle('hidden', !show);
 }
 
-/* ================= UTILITY COUNTER DATA ENGINE ================= */
-function getAggregatedData(data, key) {
-  let counts = {};
-  data.forEach(item => { counts[item[key]] = (counts[item[key]] || 0) + 1; });
+// ===== POPULATE FILTERS =====
+function populateFilters() {
+  const months = [...new Set(allData.map(r => r.Month).filter(Boolean))];
+  const monthOrder = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  months.sort((a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b));
+
+  filterMonth.innerHTML = '<option value="">Semua Bulan</option>';
+  months.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m; opt.textContent = m;
+    filterMonth.appendChild(opt);
+  });
+
+  const products = [...new Set(allData.map(r => r['Product Source']).filter(Boolean))].sort();
+  filterProduct.innerHTML = '<option value="">Semua Produk</option>';
+  products.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p; opt.textContent = p;
+    filterProduct.appendChild(opt);
+  });
+}
+
+// ===== FILTER HANDLERS =====
+filterMonth.addEventListener('change', applyGlobalFilters);
+filterProduct.addEventListener('change', applyGlobalFilters);
+tableSearchEl.addEventListener('input', () => { currentPage = 1; renderTable(); });
+tableStatusEl.addEventListener('change', () => { currentPage = 1; renderTable(); });
+tableRootCauseEl.addEventListener('change', () => { currentPage = 1; renderTable(); });
+refreshBtn.addEventListener('click', loadData);
+
+function applyGlobalFilters() {
+  const month = filterMonth.value;
+  const product = filterProduct.value;
+  filteredData = allData.filter(r => {
+    if (month && r.Month !== month) return false;
+    if (product && r['Product Source'] !== product) return false;
+    return true;
+  });
+  renderAll();
+}
+
+// ===== RENDER ALL =====
+function renderAll() {
+  renderKPIs();
+  renderTrendChart();
+  renderStatusChart();
+  renderCategoryChart();
+  renderRootCauseChart();
+  renderProductChart();
+  renderSLASection();
+  renderBranchSection();
+  currentPage = 1;
+  renderTable();
+}
+
+// ===== HELPERS =====
+function parseSLA(val) {
+  if (!val) return null;
+  const n = parseFloat(val);
+  if (isNaN(n)) return null;
+  return n;
+}
+
+function getStatusBadge(status) {
+  const s = (status || '').toLowerCase();
+  const map = {
+    resolved: 'resolved',
+    assigned: 'assigned',
+    acknowledged: 'acknowledged',
+    feedback: 'feedback',
+    open: 'open',
+  };
+  const cls = map[s] || 'open';
+  return `<span class="badge badge-${cls}">${status}</span>`;
+}
+
+function getRootCauseBadge(rc) {
+  const s = (rc || '').toLowerCase();
+  const cls = s === 'system' ? 'system' : s === 'people' ? 'people' : s === 'process' ? 'process' : 'open';
+  return rc ? `<span class="badge badge-${cls}">${rc}</span>` : '<span class="badge badge-open">-</span>';
+}
+
+function getSLADisplay(val) {
+  const n = parseSLA(val);
+  if (val === 'on progress') return `<span class="sla-progress">On Progress</span>`;
+  if (n === null) return `<span class="sla-progress">-</span>`;
+  if (n <= 1) return `<span class="sla-good">${n}h ✓</span>`;
+  if (n <= 3) return `<span class="sla-warn">${n}d ⚠</span>`;
+  return `<span class="sla-bad">${n}d ✗</span>`;
+}
+
+function countBy(data, key) {
+  const counts = {};
+  data.forEach(r => {
+    const v = r[key] || 'Tidak ada';
+    counts[v] = (counts[v] || 0) + 1;
+  });
   return counts;
 }
 
-function getAverageSlaData(data, key) {
-  let groups = {};
-  data.forEach(item => {
-    if (!groups[item[key]]) groups[item[key]] = { totalSla: 0, count: 0 };
-    groups[item[key]].totalSla += item.sla;
-    groups[item[key]].count += 1;
-  });
-  
-  let averages = {};
-  for (let g in groups) {
-    averages[g] = parseFloat((groups[g].totalSla / groups[g].count).toFixed(1));
-  }
-  return averages;
+function topN(obj, n) {
+  return Object.entries(obj)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n);
 }
 
-/* ================= SECTION 1: LOGIK ENGINE OVERVIEW ================= */
-function renderOverviewKPIs() {
-  const total = masterTickets.length;
-  const resolved = masterTickets.filter(t => t.status.toLowerCase() === 'resolved' || t.status.toLowerCase() === 'fixed' || t.status.toLowerCase() === 'closed').length;
-  const open = total - resolved;
-  const avgSla = masterTickets.reduce((acc, curr) => acc + curr.sla, 0) / total;
-
-  document.getElementById('kpi-total').innerText = total.toLocaleString('id-ID');
-  document.getElementById('kpi-resolved').innerText = resolved.toLocaleString('id-ID');
-  document.getElementById('kpi-open').innerText = open.toLocaleString('id-ID');
-  document.getElementById('kpi-avg-sla').innerText = avgSla.toFixed(1);
+function destroyChart(name) {
+  if (charts[name]) { charts[name].destroy(); delete charts[name]; }
 }
 
-function renderOverviewCharts() {
-  // 1. Tren per Bulan (Line Chart)
-  const monthData = getAggregatedData(masterTickets, 'month');
-  createCleanChart('chartTrend', {
-    type: 'line',
-    data: {
-      labels: Object.keys(monthData),
-      datasets: [{ label: 'Volume Tiket', data: Object.values(monthData), borderColor: '#6366f1', backgroundColor: 'rgba(99, 102, 241, 0.1)', fill: true, tension: 0.3 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
+// ===== KPI SECTION =====
+function renderKPIs() {
+  const total = filteredData.length;
+  const resolved = filteredData.filter(r => r.Status === 'resolved').length;
+  const open = filteredData.filter(r => r.Status !== 'resolved').length;
 
-  // 2. Status Donut Chart
-  const statusData = getAggregatedData(masterTickets, 'status');
-  createCleanChart('chartStatus', {
-    type: 'doughnut',
-    data: {
-      labels: Object.keys(statusData).map(s => s.toUpperCase()),
-      datasets: [{ data: Object.values(statusData), backgroundColor: chartColors }]
-    },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
-  });
+  const slaVals = filteredData
+    .map(r => parseSLA(r.SLA))
+    .filter(v => v !== null);
+  const avgSLA = slaVals.length ? (slaVals.reduce((a, b) => a + b, 0) / slaVals.length).toFixed(1) : '-';
 
-  // 3. Top Kategori (Horizontal Bar)
-  const catData = Object.entries(getAggregatedData(masterTickets, 'category'))
-                        .sort((a,b) => b[1] - a[1]).slice(0, 7);
-  createCleanChart('chartCategory', {
+  document.getElementById('kpiTotal').textContent = total.toLocaleString();
+  document.getElementById('kpiResolved').textContent = resolved.toLocaleString();
+  document.getElementById('kpiOpen').textContent = open.toLocaleString();
+  document.getElementById('kpiSla').textContent = avgSLA;
+  document.getElementById('kpiResolvedPct').textContent = total ? `${Math.round(resolved / total * 100)}%` : '-';
+  document.getElementById('kpiOpenPct').textContent = total ? `${Math.round(open / total * 100)}%` : '-';
+  document.getElementById('kpiSlaLabel').textContent = slaVals.length ? 'rata-rata' : '-';
+}
+
+// ===== TREND CHART =====
+function renderTrendChart() {
+  const monthOrder = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const months = [...new Set(filteredData.map(r => r.Month).filter(Boolean))];
+  months.sort((a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b));
+
+  const totalByMonth = months.map(m => filteredData.filter(r => r.Month === m).length);
+  const resolvedByMonth = months.map(m => filteredData.filter(r => r.Month === m && r.Status === 'resolved').length);
+  const openByMonth = months.map(m => filteredData.filter(r => r.Month === m && r.Status !== 'resolved').length);
+
+  destroyChart('trend');
+  const ctx = document.getElementById('trendChart').getContext('2d');
+  charts.trend = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: catData.map(c => c[0]),
-      datasets: [{ label: 'Jumlah Masalah', data: catData.map(c => c[1]), backgroundColor: '#8b5cf6' }]
-    },
-    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false }
-  });
-
-  // 4. Root Cause
-  const rcData = getAggregatedData(masterTickets, 'rootCause');
-  createCleanChart('chartRootCause', {
-    type: 'pie',
-    data: {
-      labels: Object.keys(rcData),
-      datasets: [{ data: Object.values(rcData), backgroundColor: ['#10b981', '#f59e0b', '#f43f5e', '#6366f1'] }]
-    },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
-  });
-
-  // 5. Per Produk
-  const prodData = getAggregatedData(masterTickets, 'product');
-  createCleanChart('chartProduct', {
-    type: 'bar',
-    data: {
-      labels: Object.keys(prodData),
-      datasets: [{ label: 'Tiket', data: Object.values(prodData), backgroundColor: '#22d3ee' }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
-}
-
-/* ================= SECTION 2: DAFTAR TIKET TABLE ENGINE ================= */
-function handleTableFilter() {
-  const keyword = document.getElementById('tableSearch').value.toLowerCase();
-  const statusFilter = document.getElementById('filterStatus').value;
-  const rcFilter = document.getElementById('filterRootCause').value;
-
-  filteredTickets = masterTickets.filter(t => {
-    const matchKeyword = t.id.toLowerCase().includes(keyword) || 
-                         t.summary.toLowerCase().includes(keyword) || 
-                         t.assignee.toLowerCase().includes(keyword) || 
-                         t.branch.toLowerCase().includes(keyword);
-    const matchStatus = statusFilter === "" || t.status === statusFilter;
-    const matchRc = rcFilter === "" || t.rootCause === rcFilter;
-    
-    return matchKeyword && matchStatus && matchRc;
-  });
-
-  currentPage = 1;
-  renderTicketTable();
-}
-
-// Pengurutan Kolom Tabel Dinamis
-document.querySelectorAll('th.sortable').forEach(th => {
-  th.addEventListener('click', () => {
-    const column = th.dataset.col;
-    if (sortColumn === column) {
-      sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
-    } else {
-      sortColumn = column;
-      sortDirection = 'asc';
-    }
-    
-    filteredTickets.sort((a, b) => {
-      let valA = a[sortColumn];
-      let valB = b[sortColumn];
-      
-      if(typeof valA === 'number') {
-        return sortDirection === 'asc' ? valA - valB : valB - valA;
-      } else {
-        return sortDirection === 'asc' ? 
-          String(valA).localeCompare(String(valB)) : 
-          String(valB).localeCompare(String(valA));
-      }
-    });
-
-    renderTicketTable();
-  });
-});
-
-function renderTicketTable() {
-  const tbody = document.getElementById('ticketTableBody');
-  tbody.innerHTML = '';
-
-  const total = filteredTickets.length;
-  if(total === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-secondary)">Tidak ada data tiket yang cocok dengan filter.</td></tr>`;
-    document.getElementById('paginationInfo').innerText = `Menampilkan 0 dari 0 data`;
-    document.getElementById('paginationControls').innerHTML = '';
-    return;
-  }
-
-  const startIdx = (currentPage - 1) * rowsPerPage;
-  const endIdx = Math.min(startIdx + rowsPerPage, total);
-  const pageItems = filteredTickets.slice(startIdx, endIdx);
-
-  pageItems.forEach(t => {
-    let statusClass = 'open';
-    if(['resolved', 'fixed', 'closed'].includes(t.status.toLowerCase())) statusClass = 'resolved';
-    if(['assigned', 'feedback'].includes(t.status.toLowerCase())) statusClass = t.status.toLowerCase();
-
-    tbody.innerHTML += `
-      <tr>
-        <td><strong>#${t.id}</strong></td>
-        <td><span title="${t.summary}">${t.summary.length > 55 ? t.summary.substring(0, 52) + '...' : t.summary}</span></td>
-        <td><span class="badge ${statusClass}">${t.status}</span></td>
-        <td>${t.category}</td>
-        <td>${t.rootCause}</td>
-        <td>${t.assignee}</td>
-        <td>${t.branch}</td>
-        <td><strong>${t.sla}</strong></td>
-      </tr>
-    `;
-  });
-
-  document.getElementById('paginationInfo').innerText = `Menampilkan ${startIdx + 1} - ${endIdx} dari ${total} data`;
-  renderPaginationControls(total);
-}
-
-function renderPaginationControls(totalItems) {
-  const controls = document.getElementById('paginationControls');
-  controls.innerHTML = '';
-  const totalPages = Math.ceil(totalItems / rowsPerPage);
-
-  if (totalPages <= 1) return;
-
-  const btnPrev = document.createElement('button');
-  btnPrev.className = 'page-btn';
-  btnPrev.innerText = 'Sebelumnya';
-  btnPrev.disabled = currentPage === 1;
-  btnPrev.onclick = () => { currentPage--; renderTicketTable(); };
-  controls.appendChild(btnPrev);
-
-  // Render Pintasan Halaman Maksimal 5 Tombol
-  let startPage = Math.max(1, currentPage - 2);
-  let endPage = Math.min(totalPages, startPage + 4);
-  
-  for(let i = startPage; i <= endPage; i++) {
-    const btnPage = document.createElement('button');
-    btnPage.className = `page-btn ${i === currentPage ? 'active' : ''}`;
-    btnPage.innerText = i;
-    btnPage.onclick = () => { currentPage = i; renderTicketTable(); };
-    controls.appendChild(btnPage);
-  }
-
-  const btnNext = document.createElement('button');
-  btnNext.className = 'page-btn';
-  btnNext.innerText = 'Selanjutnya';
-  btnNext.disabled = currentPage === totalPages;
-  btnNext.onclick = () => { currentPage++; renderTicketTable(); };
-  controls.appendChild(btnNext);
-}
-
-/* ================= SECTION 3: ANALISIS SLA ENGINE ================= */
-function renderSlaKPIs() {
-  const total = masterTickets.length;
-  const s1 = masterTickets.filter(t => t.sla <= 1).length;
-  const s2 = masterTickets.filter(t => t.sla > 1 && t.sla <= 3).length;
-  const s3 = masterTickets.filter(t => t.sla > 3).length;
-
-  document.getElementById('sla-bucket-1').innerText = ((s1 / total) * 100).toFixed(1) + '%';
-  document.getElementById('sla-bucket-2').innerText = ((s2 / total) * 100).toFixed(1) + '%';
-  document.getElementById('sla-bucket-3').innerText = ((s3 / total) * 100).toFixed(1) + '%';
-}
-
-function renderSlaCharts() {
-  const total = masterTickets.length;
-  const s1 = masterTickets.filter(t => t.sla <= 1).length;
-  const s2 = masterTickets.filter(t => t.sla > 1 && t.sla <= 3).length;
-  const s3 = masterTickets.filter(t => t.sla > 3).length;
-
-  // 1. Distribusi Bucket SLA
-  createCleanChart('chartSlaDist', {
-    type: 'bar',
-    data: {
-      labels: ['≤ 1 Hari (Bagus)', '2-3 Hari (Sedang)', '> 3 Hari (Terlambat)'],
-      datasets: [{ label: 'Jumlah Kasus', data: [s1, s2, s3], backgroundColor: ['#10b981', '#f59e0b', '#f43f5e'] }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
-
-  // 2. Avg SLA bulanan
-  const avgSlaMonth = getAverageSlaData(masterTickets, 'month');
-  createCleanChart('chartSlaMonth', {
-    type: 'line',
-    data: {
-      labels: Object.keys(avgSlaMonth),
-      datasets: [{ label: 'Rerata Durasi (Hari)', data: Object.values(avgSlaMonth), borderColor: '#22d3ee', fill: false, tension: 0.2 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
-
-  // 3. Avg SLA per Assignee (Top 15 Terbanyak Menangani Tiket)
-  const topAssignees = Object.entries(getAggregatedData(masterTickets, 'assignee'))
-                             .sort((a,b) => b[1] - a[1]).slice(0, 15).map(arr => arr[0]);
-  const avgSlaAssignee = getAverageSlaData(masterTickets, 'assignee');
-  
-  let targetAssigneeData = {};
-  topAssignees.forEach(name => { targetAssigneeData[name] = avgSlaAssignee[name] || 0; });
-
-  createCleanChart('chartSlaAssignee', {
-    type: 'bar',
-    data: {
-      labels: Object.keys(targetAssigneeData),
-      datasets: [{ label: 'Rerata SLA (Hari)', data: Object.values(targetAssigneeData), backgroundColor: '#8b5cf6' }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
-
-  // 4. Avg SLA per Produk
-  const avgSlaProd = getAverageSlaData(masterTickets, 'product');
-  createCleanChart('chartSlaProduct', {
-    type: 'bar',
-    data: {
-      labels: Object.keys(avgSlaProd),
-      datasets: [{ label: 'Rerata SLA (Hari)', data: Object.values(avgSlaProd), backgroundColor: '#6366f1' }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
-}
-
-/* ================= SECTION 4: ANALISIS CABANG (DYNAMICS) ================= */
-function renderCabangSection() {
-  // Hitung volume per cabang & ambil Top 20
-  const branchCounts = Object.entries(getAggregatedData(masterTickets, 'branch'))
-                             .sort((a,b) => b[1] - a[1]).slice(0, 20);
-  const top20BranchNames = branchCounts.map(b => b[0]);
-
-  // Siapkan dataset multi-layer stacked berdasarkan status unik
-  const statuses = [...new Set(masterTickets.map(t => t.status))];
-  
-  const stackedDatasets = statuses.map((status, idx) => {
-    const dataPoints = top20BranchNames.map(branch => {
-      return masterTickets.filter(t => t.branch === branch && t.status === status).length;
-    });
-    return {
-      label: status.toUpperCase(),
-      data: dataPoints,
-      backgroundColor: chartColors[idx % chartColors.length]
-    };
-  });
-
-  // 1. Render Chart Utama Stacked Bar Top 20 Cabang
-  createCleanChart('chartBranchTop20', {
-    type: 'bar',
-    data: {
-      labels: top20BranchNames,
-      datasets: stackedDatasets
+      labels: months,
+      datasets: [
+        {
+          label: 'Total',
+          data: totalByMonth,
+          backgroundColor: 'rgba(99,102,241,0.3)',
+          borderColor: PALETTE.primary,
+          borderWidth: 2,
+          borderRadius: 6,
+          order: 3,
+        },
+        {
+          label: 'Resolved',
+          data: resolvedByMonth,
+          backgroundColor: 'rgba(16,185,129,0.3)',
+          borderColor: PALETTE.emerald,
+          borderWidth: 2,
+          borderRadius: 6,
+          order: 2,
+        },
+        {
+          label: 'Open',
+          data: openByMonth,
+          backgroundColor: 'rgba(245,158,11,0.2)',
+          borderColor: PALETTE.amber,
+          borderWidth: 2,
+          borderRadius: 6,
+          order: 1,
+          type: 'line',
+          tension: 0.4,
+          fill: false,
+          pointRadius: 5,
+          pointHoverRadius: 7,
+        },
+      ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      scales: { x: { stacked: true }, y: { stacked: true } },
-      plugins: { legend: { position: 'bottom' } }
+      plugins: { legend: { position: 'top' } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+      }
     }
   });
-
-  // Render sub-chart cabang default (Kumulatif SEMUA)
-  handleBranchSpecificAnalysis();
 }
 
-// Analisis Interaktif Lanjutan Kategori & Root Cause Khusus Cabang Pilihan Dropdown
-function handleBranchSpecificAnalysis() {
-  const selectedBranch = document.getElementById('branchSelect').value;
-  
-  // Saring data berdasarkan cabang terpilih
-  const filteredSource = selectedBranch === 'ALL' ? 
-    masterTickets : masterTickets.filter(t => t.branch === selectedBranch);
+// ===== STATUS CHART =====
+function renderStatusChart() {
+  const counts = countBy(filteredData, 'Status');
+  const labels = Object.keys(counts);
+  const data = Object.values(counts);
+  const colors = labels.map((_, i) => MULTI[i % MULTI.length]);
 
-  // 2. Kategori per Cabang
-  const catData = Object.entries(getAggregatedData(filteredSource, 'category'))
-                        .sort((a,b) => b[1] - a[1]).slice(0, 8);
-  createCleanChart('chartBranchCat', {
-    type: 'bar',
+  destroyChart('status');
+  const ctx = document.getElementById('statusChart').getContext('2d');
+  charts.status = new Chart(ctx, {
+    type: 'doughnut',
     data: {
-      labels: catData.map(c => c[0]),
-      datasets: [{ label: `Volume (${selectedBranch})`, data: catData.map(c => c[1]), backgroundColor: '#8b5cf6' }]
+      labels,
+      datasets: [{ data, backgroundColor: colors.map(c => c + '99'), borderColor: colors, borderWidth: 2 }]
     },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
-
-  // 3. Root Cause per Cabang
-  const rcData = getAggregatedData(filteredSource, 'rootCause');
-  createCleanChart('chartBranchRc', {
-    type: 'bar',
-    data: {
-      labels: Object.keys(rcData),
-      datasets: [{ label: 'Distribusi', data: Object.values(rcData), backgroundColor: '#10b981' }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '65%',
+      plugins: { legend: { position: 'bottom' } },
+    }
   });
 }
+
+// ===== CATEGORY CHART =====
+function renderCategoryChart() {
+  const top = topN(countBy(filteredData, 'Category'), 10);
+  destroyChart('category');
+  const ctx = document.getElementById('categoryChart').getContext('2d');
+  charts.category = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: top.map(x => x[0].length > 30 ? x[0].slice(0, 28) + '…' : x[0]),
+      datasets: [{
+        label: 'Jumlah Tiket',
+        data: top.map(x => x[1]),
+        backgroundColor: MULTI.slice(0, top.length).map(c => c + 'aa'),
+        borderColor: MULTI.slice(0, top.length),
+        borderWidth: 2,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+        y: { grid: { display: false }, ticks: { font: { size: 11 } } },
+      }
+    }
+  });
+}
+
+// ===== ROOT CAUSE CHART =====
+function renderRootCauseChart() {
+  const counts = countBy(filteredData.filter(r => r['Root Cause']), 'Root Cause');
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const colors = [PALETTE.secondary, PALETTE.orange, PALETTE.cyan, PALETTE.rose, PALETTE.lime];
+
+  destroyChart('rootCause');
+  const ctx = document.getElementById('rootCauseChart').getContext('2d');
+  charts.rootCause = new Chart(ctx, {
+    type: 'pie',
+    data: {
+      labels: entries.map(x => x[0]),
+      datasets: [{
+        data: entries.map(x => x[1]),
+        backgroundColor: colors.slice(0, entries.length).map(c => c + 'bb'),
+        borderColor: colors.slice(0, entries.length),
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom' } },
+    }
+  });
+}
+
+// ===== PRODUCT CHART =====
+function renderProductChart() {
+  const top = topN(countBy(filteredData, 'Product Source'), 8);
+  destroyChart('product');
+  const ctx = document.getElementById('productChart').getContext('2d');
+  charts.product = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: top.map(x => x[0]),
+      datasets: [{
+        label: 'Tiket',
+        data: top.map(x => x[1]),
+        backgroundColor: MULTI.slice(0, top.length).map(c => c + 'cc'),
+        borderColor: MULTI.slice(0, top.length),
+        borderWidth: 2,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+      }
+    }
+  });
+}
+
+// ===== SLA SECTION =====
+function renderSLASection() {
+  const resolved = filteredData.filter(r => r.Status === 'resolved');
+  const withSLA = resolved.filter(r => parseSLA(r.SLA) !== null);
+  const onProgress = filteredData.filter(r => r.SLA === 'on progress').length;
+
+  const metCount = withSLA.filter(r => parseSLA(r.SLA) <= 1).length;
+  const warnCount = withSLA.filter(r => { const v = parseSLA(r.SLA); return v > 1 && v <= 3; }).length;
+  const breachCount = withSLA.filter(r => parseSLA(r.SLA) > 3).length;
+
+  document.getElementById('slaMet').textContent = metCount;
+  document.getElementById('slaWarning').textContent = warnCount;
+  document.getElementById('slaBreached').textContent = breachCount;
+  document.getElementById('slaOnProgress').textContent = onProgress;
+
+  renderSLADistChart(withSLA);
+  renderSLAMonthChart();
+  renderSLAAssigneeChart(withSLA);
+  renderSLAProductChart(withSLA);
+}
+
+function renderSLADistChart(data) {
+  const buckets = { '≤1 hari': 0, '2 hari': 0, '3 hari': 0, '4-7 hari': 0, '>7 hari': 0 };
+  data.forEach(r => {
+    const v = parseSLA(r.SLA);
+    if (v <= 1) buckets['≤1 hari']++;
+    else if (v === 2) buckets['2 hari']++;
+    else if (v === 3) buckets['3 hari']++;
+    else if (v <= 7) buckets['4-7 hari']++;
+    else buckets['>7 hari']++;
+  });
+
+  destroyChart('slaDist');
+  const ctx = document.getElementById('slaDistChart').getContext('2d');
+  const colors = [PALETTE.emerald, PALETTE.cyan, PALETTE.amber, PALETTE.orange, PALETTE.rose];
+  charts.slaDist = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: Object.keys(buckets),
+      datasets: [{
+        label: 'Jumlah Tiket',
+        data: Object.values(buckets),
+        backgroundColor: colors.map(c => c + 'aa'),
+        borderColor: colors,
+        borderWidth: 2,
+        borderRadius: 8,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+      }
+    }
+  });
+}
+
+function renderSLAMonthChart() {
+  const monthOrder = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const months = [...new Set(filteredData.map(r => r.Month).filter(Boolean))];
+  months.sort((a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b));
+
+  const avgByMonth = months.map(m => {
+    const vals = filteredData
+      .filter(r => r.Month === m && parseSLA(r.SLA) !== null)
+      .map(r => parseSLA(r.SLA));
+    return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : null;
+  });
+
+  destroyChart('slaMonth');
+  const ctx = document.getElementById('slaMonthChart').getContext('2d');
+  charts.slaMonth = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: months,
+      datasets: [{
+        label: 'Avg SLA (hari)',
+        data: avgByMonth,
+        borderColor: PALETTE.cyan,
+        backgroundColor: 'rgba(34,211,238,0.1)',
+        tension: 0.4,
+        fill: true,
+        pointRadius: 5,
+        pointBackgroundColor: PALETTE.cyan,
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+      }
+    }
+  });
+}
+
+function renderSLAAssigneeChart(data) {
+  const byAssignee = {};
+  data.forEach(r => {
+    const name = r['Assigned To'] || 'Tidak ada';
+    if (!byAssignee[name]) byAssignee[name] = [];
+    byAssignee[name].push(parseSLA(r.SLA));
+  });
+  const avg = Object.entries(byAssignee).map(([k, vals]) => ({
+    name: k.length > 25 ? k.slice(0, 23) + '…' : k,
+    avg: vals.reduce((a, b) => a + b, 0) / vals.length,
+    count: vals.length,
+  })).sort((a, b) => b.count - a.count).slice(0, 15);
+
+  destroyChart('slaAssignee');
+  const ctx = document.getElementById('slaAssigneeChart').getContext('2d');
+  charts.slaAssignee = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: avg.map(x => x.name),
+      datasets: [{
+        label: 'Avg SLA (hari)',
+        data: avg.map(x => +x.avg.toFixed(2)),
+        backgroundColor: avg.map(x => x.avg <= 1 ? '#10b98188' : x.avg <= 3 ? '#f59e0b88' : '#ef444488'),
+        borderColor: avg.map(x => x.avg <= 1 ? PALETTE.emerald : x.avg <= 3 ? PALETTE.amber : '#ef4444'),
+        borderWidth: 2,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+        y: { grid: { display: false }, ticks: { font: { size: 11 } } },
+      }
+    }
+  });
+}
+
+function renderSLAProductChart(data) {
+  const byProduct = {};
+  data.forEach(r => {
+    const p = r['Product Source'] || 'Lainnya';
+    if (!byProduct[p]) byProduct[p] = [];
+    byProduct[p].push(parseSLA(r.SLA));
+  });
+  const entries = Object.entries(byProduct).map(([k, vals]) => ({
+    name: k,
+    avg: vals.reduce((a, b) => a + b, 0) / vals.length,
+  })).sort((a, b) => a.avg - b.avg);
+
+  destroyChart('slaProduct');
+  const ctx = document.getElementById('slaProductChart').getContext('2d');
+  charts.slaProduct = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: entries.map(x => x.name),
+      datasets: [{
+        label: 'Avg SLA (hari)',
+        data: entries.map(x => +x.avg.toFixed(2)),
+        backgroundColor: MULTI.slice(0, entries.length).map(c => c + '99'),
+        borderColor: MULTI.slice(0, entries.length),
+        borderWidth: 2,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+      }
+    }
+  });
+}
+
+// ===== BRANCH SECTION =====
+function renderBranchSection() {
+  const top20 = topN(countBy(filteredData, 'Branch Name'), 20);
+  const top10Labels = top20.slice(0, 10).map(x => x[0]);
+
+  renderBranchBar(top20);
+  renderBranchStatus(top10Labels);
+  renderBranchCat(top10Labels);
+  renderBranchRC(top10Labels);
+}
+
+function renderBranchBar(top20) {
+  destroyChart('branchBar');
+  const ctx = document.getElementById('branchBarChart').getContext('2d');
+  charts.branchBar = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: top20.map(x => x[0]),
+      datasets: [{
+        label: 'Jumlah Tiket',
+        data: top20.map(x => x[1]),
+        backgroundColor: MULTI.map(c => c + '99'),
+        borderColor: MULTI,
+        borderWidth: 2,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+        y: { grid: { display: false }, ticks: { font: { size: 11 } } },
+      }
+    }
+  });
+}
+
+function renderBranchStatus(top10Labels) {
+  const statuses = [...new Set(filteredData.map(r => r.Status).filter(Boolean))];
+  const datasets = statuses.map((st, i) => ({
+    label: st,
+    data: top10Labels.map(b => filteredData.filter(r => r['Branch Name'] === b && r.Status === st).length),
+    backgroundColor: MULTI[i % MULTI.length] + '99',
+    borderColor: MULTI[i % MULTI.length],
+    borderWidth: 2,
+    borderRadius: 4,
+  }));
+
+  destroyChart('branchStatus');
+  const ctx = document.getElementById('branchStatusChart').getContext('2d');
+  charts.branchStatus = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: top10Labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { position: 'top' } },
+      scales: {
+        x: { stacked: true, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } },
+      }
+    }
+  });
+}
+
+function renderBranchCat(top10Labels) {
+  const cats = topN(countBy(filteredData, 'Category'), 5).map(x => x[0]);
+  const datasets = cats.map((cat, i) => ({
+    label: cat.length > 20 ? cat.slice(0, 18) + '…' : cat,
+    data: top10Labels.map(b => filteredData.filter(r => r['Branch Name'] === b && r.Category === cat).length),
+    backgroundColor: MULTI[i % MULTI.length] + '99',
+    borderColor: MULTI[i % MULTI.length],
+    borderWidth: 2,
+    borderRadius: 4,
+  }));
+
+  destroyChart('branchCat');
+  const ctx = document.getElementById('branchCatChart').getContext('2d');
+  charts.branchCat = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: top10Labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { position: 'top' } },
+      scales: {
+        x: { stacked: true, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } },
+      }
+    }
+  });
+}
+
+function renderBranchRC(top10Labels) {
+  const rcs = ['System', 'People', 'Process'];
+  const datasets = rcs.map((rc, i) => ({
+    label: rc,
+    data: top10Labels.map(b => filteredData.filter(r => r['Branch Name'] === b && r['Root Cause'] === rc).length),
+    backgroundColor: [PALETTE.secondary, PALETTE.orange, PALETTE.cyan][i] + '99',
+    borderColor: [PALETTE.secondary, PALETTE.orange, PALETTE.cyan][i],
+    borderWidth: 2,
+    borderRadius: 4,
+  }));
+
+  destroyChart('branchRc');
+  const ctx = document.getElementById('branchRcChart').getContext('2d');
+  charts.branchRc = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: top10Labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { position: 'top' } },
+      scales: {
+        x: { stacked: true, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } },
+      }
+    }
+  });
+}
+
+// ===== TABLE =====
+function renderTable() {
+  const search = tableSearchEl.value.toLowerCase();
+  const status = tableStatusEl.value.toLowerCase();
+  const rootCause = tableRootCauseEl.value;
+
+  let rows = filteredData.filter(r => {
+    if (status && (r.Status || '').toLowerCase() !== status) return false;
+    if (rootCause && r['Root Cause'] !== rootCause) return false;
+    if (search) {
+      const combined = [r.Id, r.Summary, r['Branch Name'], r.Category, r['Product Source'], r['Assigned To']].join(' ').toLowerCase();
+      if (!combined.includes(search)) return false;
+    }
+    return true;
+  });
+
+  // Sort
+  rows.sort((a, b) => {
+    let va = a[sortCol] || '';
+    let vb = b[sortCol] || '';
+    if (sortCol === 'Id') { va = parseInt(va) || 0; vb = parseInt(vb) || 0; }
+    else if (sortCol === 'Date Submitted') { va = new Date(va); vb = new Date(vb); }
+    if (va < vb) return sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  tableCountEl.textContent = `${rows.length} tiket`;
+  const total = Math.ceil(rows.length / PAGE_SIZE);
+  const pageRows = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  tableBodyEl.innerHTML = pageRows.map(r => {
+    const date = r['Date Submitted'] ? r['Date Submitted'].split(' ')[0] : '-';
+    const summary = (r.Summary || '-').length > 55 ? r.Summary.slice(0, 53) + '…' : (r.Summary || '-');
+    const cat = (r.Category || '-').length > 25 ? r.Category.slice(0, 23) + '…' : (r.Category || '-');
+    return `<tr>
+      <td><strong style="color:var(--accent-primary)">#${r.Id}</strong></td>
+      <td><span style="color:var(--text-secondary);font-size:0.78rem">${date}</span></td>
+      <td title="${r.Summary || ''}">${summary}</td>
+      <td><span style="font-size:0.78rem">${cat}</span></td>
+      <td><span style="font-size:0.78rem;color:var(--accent-cyan)">${r['Product Source'] || '-'}</span></td>
+      <td>${getStatusBadge(r.Status)}</td>
+      <td>${getRootCauseBadge(r['Root Cause'])}</td>
+      <td>${getSLADisplay(r.SLA)}</td>
+      <td><span style="font-size:0.78rem">${r['Branch Name'] || '-'}</span></td>
+    </tr>`;
+  }).join('');
+
+  renderPagination(total);
+}
+
+// Sortable table headers
+document.querySelectorAll('th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    else { sortCol = col; sortDir = 'asc'; }
+    renderTable();
+  });
+});
+
+function renderPagination(total) {
+  if (total <= 1) { paginationEl.innerHTML = ''; return; }
+  const maxBtn = 7;
+  let pages = [];
+
+  if (total <= maxBtn) {
+    pages = Array.from({ length: total }, (_, i) => i + 1);
+  } else {
+    pages = [1];
+    if (currentPage > 3) pages.push('…');
+    for (let i = Math.max(2, currentPage - 1); i <= Math.min(total - 1, currentPage + 1); i++) pages.push(i);
+    if (currentPage < total - 2) pages.push('…');
+    pages.push(total);
+  }
+
+  paginationEl.innerHTML = `
+    <button class="page-btn" ${currentPage === 1 ? 'disabled' : ''} onclick="goPage(${currentPage - 1})">‹</button>
+    ${pages.map(p => p === '…' ? `<span class="page-btn" style="cursor:default">…</span>` : `<button class="page-btn ${p === currentPage ? 'active' : ''}" onclick="goPage(${p})">${p}</button>`).join('')}
+    <button class="page-btn" ${currentPage === total ? 'disabled' : ''} onclick="goPage(${currentPage + 1})">›</button>
+  `;
+}
+
+window.goPage = (p) => { currentPage = p; renderTable(); };
+
+// ===== INIT =====
+window.addEventListener('DOMContentLoaded', () => {
+  loadData();
+});
