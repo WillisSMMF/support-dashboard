@@ -4,7 +4,7 @@
 
 // 📍 TEMPAT MENEMPELKAN LINK GOOGLE SHEET ANDA
 // Ganti URL di bawah ini dengan link Google Sheet Anda yang sudah di-publish sebagai CSV
-const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRxmI-osn5Oq2XBN8igHn5RpcxyFlhU7E02VtUgV3CLrLjrTiG09LfaC9jvXIpPUeQgGP22IW2eT5WZ/pub?gid=408991878&single=true&output=csv';
+const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRxmI-osn5Oq2XBN8igHn5RpcxyFlhU7E02VtUgV3CLrLjrTiG09LfaC9jvXIpPUeQgGP22IW2eT5WZ/pubhtml?gid=408991878&single=true&output=csv';
 
 // CORS Proxy fallback — Dioptimalkan untuk kompatibilitas mobile (Menghapus proxy yang memerlukan aktivasi manual)
 const CORS_PROXIES = [
