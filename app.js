@@ -5,11 +5,10 @@
 // URL Google Sheet yang dipublish sebagai CSV
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRxmI-osn5Oq2XBN8igHn5RpcxyFlhU7E02VtUgV3CLrLjrTiG09LfaC9jvXIpPUeQgGP22IW2eT5WZ/pub?gid=408991878&single=true&output=csv';
 
-// CORS Proxy fallback — digunakan saat membuka dari file:// lokal
+// CORS Proxy fallback — digunakan saat membuka dari file:// lokal atau saat mobile mengalami kendala CORS
 const CORS_PROXIES = [
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
   url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  url => `https://cors-anywhere.herokuapp.com/${url}`,
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`
 ];
 
 // ===== CHART.JS DEFAULTS =====
@@ -105,36 +104,54 @@ function navigateTo(section) {
 }
 
 // ===== DATA LOADING =====
-// Strategi: coba langsung → jika gagal (CORS file://), coba proxy satu per satu
+// Strategi yang diperbaiki untuk mobile browser (Fetch + Cache Buster + Papa.parse string langsung)
 async function loadData() {
   showLoading(true);
   refreshBtn.classList.add('spinning');
 
   const isLocal = location.protocol === 'file:';
+  
+  // Tambahkan cache buster timestamp agar browser mobile tidak meng-cache error CORS sebelumnya
+  const cacheBuster = `&_cb=${new Date().getTime()}`;
+  const targetUrl = SHEET_CSV_URL + cacheBuster;
 
-  // Buat daftar URL yang akan dicoba: direct dulu, lalu masing-masing proxy
+  // Buat daftar URL yang akan dicoba: direct dulu (jika online), lalu masing-masing proxy terpercaya
   const urlsToTry = isLocal
-    ? CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))
-    : [SHEET_CSV_URL, ...CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))];
+    ? CORS_PROXIES.map(fn => fn(targetUrl))
+    : [targetUrl, ...CORS_PROXIES.map(fn => fn(targetUrl))];
 
   for (let i = 0; i < urlsToTry.length; i++) {
     const url = urlsToTry[i];
     try {
+      // Menggunakan fetch native dengan penanganan redirect eksplisit (lebih bersahabat di mobile Safari/Chrome)
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'text/csv, text/plain, */*' },
+        redirect: 'follow'
+      });
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const csvText = await response.text();
+
+      if (!csvText || csvText.trim() === '') throw new Error('Data teks CSV kosong');
+
+      // Parsing data menggunakan Papa.parse dari text string langsung
       await new Promise((resolve, reject) => {
-        Papa.parse(url, {
-          download: true,
+        Papa.parse(csvText, {
           header: true,
           skipEmptyLines: true,
           complete(results) {
             const rows = results.data.filter(r => r.Id && r.Id.trim() !== '');
-            if (rows.length === 0) { reject(new Error('Empty result')); return; }
+            if (rows.length === 0) { reject(new Error('Format data tidak sesuai / baris kosong')); return; }
             allData = rows;
             showLoading(false);
             refreshBtn.classList.remove('spinning');
             lastUpdateEl.textContent = 'Update: ' + new Date().toLocaleTimeString('id-ID');
+            
             // Tampilkan indikator sumber data
             document.querySelector('.ds-val').textContent =
               i === 0 && !isLocal ? 'Google Sheets ✓' : `Via Proxy ${i} ✓`;
+              
             populateFilters();
             applyGlobalFilters();
             resolve();
@@ -142,26 +159,40 @@ async function loadData() {
           error(err) { reject(err); }
         });
       });
-      return; // Berhasil, keluar dari loop
+      return; // Jika berhasil sampai baris ini, keluar dari loop pencobaan
     } catch (err) {
-      console.warn(`URL ke-${i + 1} gagal:`, url, err.message);
+      console.warn(`Pencobaan ke-${i + 1} gagal:`, url, err.message);
+      
+      // Jika semua opsi URL (Direct maupun Proxy) sudah dicoba dan gagal semua
       if (i === urlsToTry.length - 1) {
-        // Semua gagal
         showLoading(false);
         refreshBtn.classList.remove('spinning');
+        
+        let detailedErrorMsg = '';
+        if (isLocal) {
+          detailedErrorMsg = `
+            Browser memblokir akses ke Google Sheets saat dibuka dari protocol lokal <code style="background:#1a2235;padding:2px 6px;border-radius:4px">file://</code>.<br><br>
+            <strong style="color:#f1f5f9">Solusi Tercepat:</strong><br>
+            Upload folder ke <a href="https://app.netlify.com/drop" target="_blank" style="color:#6366f1;text-decoration:underline">Netlify Drop</a> — gratis dan online dalam 30 detik agar berjalan di protocol <code style="background:#1a2235;padding:2px 6px;border-radius:4px">https://</code>.`;
+        } else {
+          detailedErrorMsg = `
+            Browser mobile memblokir request data atau proxy mengalami gangguan.<br><br>
+            <strong style="color:#f1f5f9">Kemungkinan Penyebab di Mobile:</strong><br>
+            1. Fitur <strong style="color:#f1f5f9">"Prevent Cross-Site Tracking"</strong> di browser mobile Anda memblokir pemuatan data redirect Google Sheets.<br>
+            2. Fitur AdBlocker / Browser Brave memblokir domain proxy eksternal.<br><br>
+            <strong style="color:#f1f5f9">Solusi:</strong> Coba nonaktifkan pembatasan pelacakan lintas situs di pengaturan Safari/Chrome mobile Anda, matikan AdBlocker sementara, atau muat ulang halaman.`;
+        }
+
         document.getElementById('loadingOverlay').classList.remove('hidden');
         document.getElementById('loadingOverlay').innerHTML = `
-          <div style="text-align:center;padding:32px;max-width:480px">
+          <div style="text-align:center;padding:32px;max-width:480px;background:#111827;border-radius:12px;border:1px solid rgba(255,255,255,0.1);box-shadow:0 10px 25px rgba(0,0,0,0.5)">
             <div style="font-size:2.5rem;margin-bottom:16px">⚠️</div>
             <h3 style="color:#f43f5e;margin-bottom:8px">Gagal Memuat Data</h3>
-            <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:20px">
-              Browser memblokir akses ke Google Sheets saat dibuka dari <code style="background:#1a2235;padding:2px 6px;border-radius:4px">file://</code>.<br><br>
-              <strong style="color:#f1f5f9">Solusi Tercepat:</strong><br>
-              Upload folder ke <a href="https://app.netlify.com/drop" target="_blank" style="color:#6366f1">Netlify Drop</a> — gratis, drag & drop, online dalam 30 detik.
+            <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:20px;line-height:1.6;text-align:left">
+              ${detailedErrorMsg}
             </p>
             <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-              <button onclick="loadData()" style="padding:9px 20px;background:#6366f1;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">↻ Coba Lagi</button>
-              <a href="https://app.netlify.com/drop" target="_blank" style="padding:9px 20px;background:#10b981;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;text-decoration:none">🚀 Buka Netlify Drop</a>
+              <button onclick="location.reload()" style="padding:10px 20px;background:#6366f1;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;transition:0.2s">↻ Muat Ulang Halaman</button>
             </div>
           </div>`;
       }
