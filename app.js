@@ -9,6 +9,7 @@ const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRxmI-osn
 const CORS_PROXIES = [
   url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
   url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://thingproxy.freeboard.io/fetch/${url}`,
   url => `https://cors-anywhere.herokuapp.com/${url}`,
 ];
 
@@ -112,10 +113,11 @@ async function loadData() {
 
   const isLocal = location.protocol === 'file:';
 
-  // Buat daftar URL yang akan dicoba: direct dulu, lalu masing-masing proxy
-  const urlsToTry = isLocal
-    ? CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))
-    : [SHEET_CSV_URL, ...CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))];
+ // Selalu coba direct dulu, lalu semua proxy — tanpa peduli file:// atau https://
+  const urlsToTry = [
+    SHEET_CSV_URL,
+    ...CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))
+  ];
 
   for (let i = 0; i < urlsToTry.length; i++) {
     const url = urlsToTry[i];
