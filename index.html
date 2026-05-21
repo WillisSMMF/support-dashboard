@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Mantis Bug Tracker Dashboard | Product Support</title>
-  <meta name="description" content="Dashboard interaktif tim Product Support." />
+  <meta name="description" content="Dashboard interaktif tim Product Support berbasis Google Sheets." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -13,361 +13,220 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- Sidebar -->
+
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div class="logo">
         <div class="logo-icon">🐞</div>
         <div class="logo-text">
           <span class="logo-title">Product Support</span>
-          <span class="logo-sub">Dashboard</span>
+          <span class="logo-sub">Mantis Dashboard</span>
         </div>
       </div>
-      <button class="sidebar-toggle" id="sidebarToggle" title="Toggle Sidebar">‹</button>
     </div>
-
-    <nav class="sidebar-nav">
-      <a href="#overview" class="nav-item active" data-section="overview" id="nav-overview">
-        <span class="nav-icon">📊</span>
-        <span class="nav-label">Overview</span>
-      </a>
-      <a href="#tickets" class="nav-item" data-section="tickets" id="nav-tickets">
-        <span class="nav-icon">🎫</span>
-        <span class="nav-label">Tiket</span>
-      </a>
-      <a href="#sla" class="nav-item" data-section="sla" id="nav-sla">
-        <span class="nav-icon">⏱️</span>
-        <span class="nav-label">SLA</span>
-      </a>
-      <a href="#branch" class="nav-item" data-section="branch" id="nav-branch">
-        <span class="nav-icon">🗺️</span>
-        <span class="nav-label">Cabang</span>
-      </a>
+    <nav class="sidebar-menu">
+      <button class="menu-item active" data-section="overview">
+        <span class="menu-icon">📊</span> Overview KPI
+      </button>
+      <button class="menu-item" data-section="tiket">
+        <span class="menu-icon">🎫</span> Daftar Tiket
+      </button>
+      <button class="menu-item" data-section="sla">
+        <span class="menu-icon">⏱️</span> Analisis SLA
+      </button>
+      <button class="menu-item" data-section="cabang">
+        <span class="menu-icon">🗺️</span> Analisis Cabang
+      </button>
     </nav>
-
     <div class="sidebar-footer">
-      <div class="data-source">
-        <span class="ds-icon">🔗</span>
-        <div class="ds-info">
-          <span class="ds-label">Data Source</span>
-          <span class="ds-val">Google Sheets</span>
-        </div>
-      </div>
-      <div class="last-update" id="lastUpdate">Memuat...</div>
+      <span id="loadStatus" class="status-badge loading">Memuat Data...</span>
     </div>
   </aside>
 
-  <!-- Main Content -->
-  <main class="main" id="main">
-    <!-- Top Bar -->
+  <main class="main-content">
     <header class="topbar">
-      <div class="topbar-left">
-        <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
-        <div class="breadcrumb">
-          <span class="breadcrumb-icon">📊</span>
-          <span id="currentPageTitle">Overview</span>
-        </div>
-      </div>
-      <div class="topbar-right">
-        <div class="filter-group">
-          <label for="filterMonth">Bulan:</label>
-          <select id="filterMonth" class="filter-select">
-            <option value="">Semua</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label for="filterProduct">Produk:</label>
-          <select id="filterProduct" class="filter-select">
-            <option value="">Semua</option>
-          </select>
-        </div>
-        <button class="refresh-btn" id="refreshBtn" title="Refresh Data">
-          <span class="refresh-icon">↻</span>
-          <span>Refresh</span>
-        </button>
+      <h1 id="pageTitle">Overview KPI</h1>
+      <div class="topbar-actions">
+        <button onclick="refreshData()" class="btn-refresh" title="Sinkronisasi Ulang Data">🔄 Sync Data</button>
       </div>
     </header>
 
-    <!-- Loading State -->
-    <div class="loading-overlay" id="loadingOverlay">
-      <div class="loading-spinner"></div>
-      <p class="loading-text">Memuat data dari Google Sheets...</p>
-    </div>
+    <div class="content-body">
 
-    <!-- Content Area -->
-    <div class="content" id="content">
-
-      <!-- ===== SECTION: OVERVIEW ===== -->
-      <section class="section active" id="section-overview">
-        <div class="section-header">
-          <h1 class="section-title">Overview Dashboard</h1>
-          <p class="section-subtitle">Ringkasan performa tiket Product Support</p>
-        </div>
-
-        <!-- KPI Cards -->
-        <div class="kpi-grid" id="kpiGrid">
-          <div class="kpi-card" id="kpi-total">
-            <div class="kpi-icon">🎫</div>
+      <section id="section-overview" class="dashboard-section active">
+        <div class="kpi-grid">
+          <div class="kpi-card">
             <div class="kpi-info">
-              <div class="kpi-value" id="kpiTotal">-</div>
-              <div class="kpi-label">Total Tiket</div>
+              <span class="kpi-label">Total Tiket</span>
+              <h2 class="kpi-value" id="kpi-total">0</h2>
             </div>
-            <div class="kpi-trend" id="kpiTotalTrend"></div>
+            <div class="kpi-icon total">🎫</div>
           </div>
-          <div class="kpi-card kpi-resolved" id="kpi-resolved">
-            <div class="kpi-icon">✅</div>
+          <div class="kpi-card">
             <div class="kpi-info">
-              <div class="kpi-value" id="kpiResolved">-</div>
-              <div class="kpi-label">Resolved</div>
+              <span class="kpi-label">Resolved</span>
+              <h2 class="kpi-value text-success" id="kpi-resolved">0</h2>
             </div>
-            <div class="kpi-badge" id="kpiResolvedPct"></div>
+            <div class="kpi-icon resolved">✅</div>
           </div>
-          <div class="kpi-card kpi-open" id="kpi-open">
-            <div class="kpi-icon">🔓</div>
+          <div class="kpi-card">
             <div class="kpi-info">
-              <div class="kpi-value" id="kpiOpen">-</div>
-              <div class="kpi-label">Open / On Progress</div>
+              <span class="kpi-label">Open / Assigned</span>
+              <h2 class="kpi-value text-warning" id="kpi-open">0</h2>
             </div>
-            <div class="kpi-badge" id="kpiOpenPct"></div>
+            <div class="kpi-icon open">⏳</div>
           </div>
-          <div class="kpi-card kpi-sla" id="kpi-sla">
-            <div class="kpi-icon">⚡</div>
+          <div class="kpi-card">
             <div class="kpi-info">
-              <div class="kpi-value" id="kpiSla">-</div>
-              <div class="kpi-label">Avg SLA (hari)</div>
+              <span class="kpi-label">Avg SLA (Hari)</span>
+              <h2 class="kpi-value text-cyan" id="kpi-avg-sla">0.0</h2>
             </div>
-            <div class="kpi-badge" id="kpiSlaLabel"></div>
+            <div class="kpi-icon sla">⚡</div>
           </div>
         </div>
 
-        <!-- Charts Row 1 -->
-        <div class="charts-row">
-          <div class="chart-card chart-lg">
-            <div class="chart-header">
-              <h3>Tren Tiket per Bulan</h3>
-              <div class="chart-legend-custom" id="trendLegend"></div>
-            </div>
-            <div class="chart-body">
-              <canvas id="trendChart"></canvas>
-            </div>
+        <div class="charts-row grid-2-1">
+          <div class="chart-card">
+            <div class="chart-header"><h3>📈 Tren Volume Tiket per Bulan</h3></div>
+            <div class="chart-body"><canvas id="chartTrend"></canvas></div>
           </div>
-          <div class="chart-card chart-sm">
-            <div class="chart-header">
-              <h3>Status Tiket</h3>
-            </div>
-            <div class="chart-body">
-              <canvas id="statusChart"></canvas>
-            </div>
+          <div class="chart-card">
+            <div class="chart-header"><h3>🍩 Distribusi Status</h3></div>
+            <div class="chart-body"><canvas id="chartStatus"></canvas></div>
           </div>
         </div>
 
-        <!-- Charts Row 2 -->
-        <div class="charts-row">
+        <div class="charts-row grid-3">
           <div class="chart-card">
-            <div class="chart-header">
-              <h3>Top Kategori</h3>
-            </div>
-            <div class="chart-body">
-              <canvas id="categoryChart"></canvas>
-            </div>
+            <div class="chart-header"><h3>🏷️ Top Kategori Masalah</h3></div>
+            <div class="chart-body"><canvas id="chartCategory"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-header">
-              <h3>Distribusi Root Cause</h3>
-            </div>
-            <div class="chart-body">
-              <canvas id="rootCauseChart"></canvas>
-            </div>
+            <div class="chart-header"><h3>🧠 Distribusi Root Cause</h3></div>
+            <div class="chart-body"><canvas id="chartRootCause"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-header">
-              <h3>Per Produk</h3>
-            </div>
-            <div class="chart-body">
-              <canvas id="productChart"></canvas>
-            </div>
+            <div class="chart-header"><h3>💻 Breakdown per Produk</h3></div>
+            <div class="chart-body"><canvas id="chartProduct"></canvas></div>
           </div>
         </div>
       </section>
 
-      <!-- ===== SECTION: TICKETS ===== -->
-      <section class="section" id="section-tickets">
-        <div class="section-header">
-          <h1 class="section-title">Daftar Tiket</h1>
-          <p class="section-subtitle">Tabel lengkap semua tiket Product Support</p>
-        </div>
-        <div class="table-toolbar">
-          <div class="search-wrap">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="tableSearch" placeholder="Cari tiket, summary, branch..." class="search-input" />
+      <section id="section-tiket" class="dashboard-section">
+        <div class="filter-toolbar">
+          <div class="search-box">
+            <input type="text" id="tableSearch" placeholder="Cari ID, ringkasan, cabang, atau PIC..." oninput="handleTableFilter()" />
           </div>
-          <div class="filter-group">
-            <select id="tableStatus" class="filter-select">
+          <div class="filter-selects">
+            <select id="filterStatus" onchange="handleTableFilter()">
               <option value="">Semua Status</option>
-              <option value="resolved">Resolved</option>
-              <option value="assigned">Assigned</option>
-              <option value="acknowledged">Acknowledged</option>
-              <option value="feedback">Feedback</option>
             </select>
-          </div>
-          <div class="filter-group">
-            <select id="tableRootCause" class="filter-select">
+            <select id="filterRootCause" onchange="handleTableFilter()">
               <option value="">Semua Root Cause</option>
-              <option value="System">System</option>
-              <option value="People">People</option>
-              <option value="Process">Process</option>
             </select>
           </div>
-          <div class="table-count" id="tableCount">-</div>
         </div>
+
         <div class="table-container">
           <table class="data-table" id="ticketTable">
             <thead>
               <tr>
-                <th class="sortable" data-col="Id">ID <span class="sort-icon">↕</span></th>
-                <th class="sortable" data-col="Date Submitted">Tanggal <span class="sort-icon">↕</span></th>
-                <th>Summary</th>
-                <th>Kategori</th>
-                <th>Produk</th>
-                <th class="sortable" data-col="Status">Status <span class="sort-icon">↕</span></th>
-                <th>Root Cause</th>
-                <th>SLA</th>
-                <th>Cabang</th>
+                <th class="sortable" data-col="id">ID ⇅</th>
+                <th class="sortable" data-col="summary">Ringkasan Masalah ⇅</th>
+                <th class="sortable" data-col="status">Status ⇅</th>
+                <th class="sortable" data-col="category">Kategori ⇅</th>
+                <th class="sortable" data-col="rootCause">Root Cause ⇅</th>
+                <th class="sortable" data-col="assignee">Assigned To ⇅</th>
+                <th class="sortable" data-col="branch">Cabang ⇅</th>
+                <th class="sortable" data-col="sla">SLA (Hari) ⇅</th>
               </tr>
             </thead>
             <tbody id="ticketTableBody">
-            </tbody>
+              </tbody>
           </table>
         </div>
-        <div class="pagination" id="pagination"></div>
+
+        <div class="pagination-wrapper">
+          <span class="pagination-info" id="paginationInfo">Menampilkan 0 - 0 dari 0 data</span>
+          <div class="pagination-buttons" id="paginationControls"></div>
+        </div>
       </section>
 
-      <!-- ===== SECTION: SLA ===== -->
-      <section class="section" id="section-sla">
-        <div class="section-header">
-          <h1 class="section-title">Analisis SLA</h1>
-          <p class="section-subtitle">Monitoring Service Level Agreement penyelesaian tiket</p>
-        </div>
-
+      <section id="section-sla" class="dashboard-section">
         <div class="kpi-grid">
-          <div class="kpi-card">
-            <div class="kpi-icon">✅</div>
+          <div class="kpi-card border-success">
             <div class="kpi-info">
-              <div class="kpi-value" id="slaMet">-</div>
-              <div class="kpi-label">SLA ≤ 1 hari</div>
+              <span class="kpi-label">SLA Bagus (≤ 1 Hari)</span>
+              <h2 class="kpi-value text-success" id="sla-bucket-1">0%</h2>
             </div>
           </div>
-          <div class="kpi-card kpi-open">
-            <div class="kpi-icon">⚠️</div>
+          <div class="kpi-card border-warning">
             <div class="kpi-info">
-              <div class="kpi-value" id="slaWarning">-</div>
-              <div class="kpi-label">SLA 2-3 hari</div>
+              <span class="kpi-label">SLA Sedang (2-3 Hari)</span>
+              <h2 class="kpi-value text-warning" id="sla-bucket-2">0%</h2>
             </div>
           </div>
-          <div class="kpi-card" style="--kpi-color: #ef4444">
-            <div class="kpi-icon">🚨</div>
+          <div class="kpi-card border-danger">
             <div class="kpi-info">
-              <div class="kpi-value" id="slaBreached">-</div>
-              <div class="kpi-label">SLA &gt; 3 hari</div>
-            </div>
-          </div>
-          <div class="kpi-card kpi-sla">
-            <div class="kpi-icon">📈</div>
-            <div class="kpi-info">
-              <div class="kpi-value" id="slaOnProgress">-</div>
-              <div class="kpi-label">On Progress</div>
+              <span class="kpi-label">SLA Terlambat (> 3 Hari)</span>
+              <h2 class="kpi-value text-danger" id="sla-bucket-3">0%</h2>
             </div>
           </div>
         </div>
 
-        <div class="charts-row">
-          <div class="chart-card chart-lg">
-            <div class="chart-header">
-              <h3>Distribusi SLA (hari penyelesaian)</h3>
-            </div>
-            <div class="chart-body">
-              <canvas id="slaDistChart"></canvas>
-            </div>
-          </div>
-          <div class="chart-card chart-sm">
-            <div class="chart-header">
-              <h3>SLA per Bulan (avg hari)</h3>
-            </div>
-            <div class="chart-body">
-              <canvas id="slaMonthChart"></canvas>
-            </div>
-          </div>
-        </div>
-
-        <div class="charts-row">
-          <div class="chart-card chart-lg">
-            <div class="chart-header">
-              <h3>Top 15 Assignee berdasarkan Rata-rata SLA</h3>
-            </div>
-            <div class="chart-body chart-body-tall">
-              <canvas id="slaAssigneeChart"></canvas>
-            </div>
+        <div class="charts-row grid-2">
+          <div class="chart-card">
+            <div class="chart-header"><h3>📊 Distribusi Bucket SLA</h3></div>
+            <div class="chart-body"><canvas id="chartSlaDist"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-header">
-              <h3>SLA per Produk</h3>
-            </div>
-            <div class="chart-body">
-              <canvas id="slaProductChart"></canvas>
-            </div>
+            <div class="chart-header"><h3>📅 Rata-rata SLA per Bulan</h3></div>
+            <div class="chart-body"><canvas id="chartSlaMonth"></canvas></div>
+          </div>
+        </div>
+
+        <div class="charts-row grid-2">
+          <div class="chart-card">
+            <div class="chart-header"><h3>👤 Rata-rata SLA per Assignee (Top 15)</h3></div>
+            <div class="chart-body"><canvas id="chartSlaAssignee"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-header"><h3>📦 Rata-rata SLA per Produk</h3></div>
+            <div class="chart-body"><canvas id="chartSlaProduct"></canvas></div>
           </div>
         </div>
       </section>
 
-      <!-- ===== SECTION: BRANCH ===== -->
-      <section class="section" id="section-branch">
-        <div class="section-header">
-          <h1 class="section-title">Analisis per Cabang</h1>
-          <p class="section-subtitle">Volume dan performa tiket berdasarkan lokasi cabang</p>
-        </div>
-
+      <section id="section-cabang" class="dashboard-section">
         <div class="charts-row">
-          <div class="chart-card chart-lg">
-            <div class="chart-header">
-              <h3>Top 20 Cabang Paling Banyak Tiket</h3>
-            </div>
-            <div class="chart-body chart-body-tall">
-              <canvas id="branchBarChart"></canvas>
-            </div>
-          </div>
-          <div class="chart-card">
-            <div class="chart-header">
-              <h3>Status Tiket per Cabang (Top 10)</h3>
-            </div>
-            <div class="chart-body chart-body-tall">
-              <canvas id="branchStatusChart"></canvas>
-            </div>
+          <div class="chart-card chart-xl">
+            <div class="chart-header"><h3>🗺️ Top 20 Cabang dengan Volume Tiket Tertinggi (Stacked Status)</h3></div>
+            <div class="chart-body tall-canvas"><canvas id="chartBranchTop20"></canvas></div>
           </div>
         </div>
 
-        <div class="charts-row">
-          <div class="chart-card chart-lg">
-            <div class="chart-header">
-              <h3>Breakdown Kategori per Cabang (Top 10)</h3>
-            </div>
-            <div class="chart-body chart-body-tall">
-              <canvas id="branchCatChart"></canvas>
-            </div>
+        <div class="filter-toolbar branch-specific-filter">
+          <label for="branchSelect">📍 <strong>Analisis Detail Cabang Khusus:</strong></label>
+          <select id="branchSelect" onchange="handleBranchSpecificAnalysis()">
+            <option value="ALL">Semua Cabang (Kumulatif)</option>
+          </select>
+        </div>
+
+        <div class="charts-row grid-2">
+          <div class="chart-card">
+            <div class="chart-header"><h3>🗂️ Breakdown Kategori Masalah di Cabang</h3></div>
+            <div class="chart-body"><canvas id="chartBranchCat"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-header">
-              <h3>Root Cause per Cabang (Top 10)</h3>
-            </div>
-            <div class="chart-body chart-body-tall">
-              <canvas id="branchRcChart"></canvas>
-            </div>
+            <div class="chart-header"><h3>🛠️ Analisis Root Cause di Cabang</h3></div>
+            <div class="chart-body"><canvas id="chartBranchRc"></canvas></div>
           </div>
         </div>
       </section>
 
-    </div><!-- end content -->
+    </div>
   </main>
 
-  <script src="app.js"></script>
+  <script src="apps.js"></script>
 </body>
 </html>
