@@ -1,15 +1,15 @@
 /* ==========================================
-   MANTIS DASHBOARD - APP LOGIC (OPTIMIZED)
+   MANTIS DASHBOARD - APP LOGIC
    ========================================== */
 
-// 📍 TEMPAT MENEMPELKAN LINK GOOGLE SHEET ANDA
-// Ganti URL di bawah ini dengan link Google Sheet Anda yang sudah di-publish sebagai CSV
+// URL Google Sheet yang dipublish sebagai CSV
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRxmI-osn5Oq2XBN8igHn5RpcxyFlhU7E02VtUgV3CLrLjrTiG09LfaC9jvXIpPUeQgGP22IW2eT5WZ/pub?gid=408991878&single=true&output=csv';
 
-// CORS Proxy fallback — Dioptimalkan untuk kompatibilitas mobile (Menghapus proxy yang memerlukan aktivasi manual)
+// CORS Proxy fallback — digunakan saat membuka dari file:// lokal
 const CORS_PROXIES = [
   url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://cors-anywhere.herokuapp.com/${url}`,
 ];
 
 // ===== CHART.JS DEFAULTS =====
@@ -105,12 +105,14 @@ function navigateTo(section) {
 }
 
 // ===== DATA LOADING =====
+// Strategi: coba langsung → jika gagal (CORS file://), coba proxy satu per satu
 async function loadData() {
   showLoading(true);
   refreshBtn.classList.add('spinning');
 
   const isLocal = location.protocol === 'file:';
 
+  // Buat daftar URL yang akan dicoba: direct dulu, lalu masing-masing proxy
   const urlsToTry = isLocal
     ? CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))
     : [SHEET_CSV_URL, ...CORS_PROXIES.map(fn => fn(SHEET_CSV_URL))];
@@ -130,6 +132,7 @@ async function loadData() {
             showLoading(false);
             refreshBtn.classList.remove('spinning');
             lastUpdateEl.textContent = 'Update: ' + new Date().toLocaleTimeString('id-ID');
+            // Tampilkan indikator sumber data
             document.querySelector('.ds-val').textContent =
               i === 0 && !isLocal ? 'Google Sheets ✓' : `Via Proxy ${i} ✓`;
             populateFilters();
@@ -139,10 +142,11 @@ async function loadData() {
           error(err) { reject(err); }
         });
       });
-      return; 
+      return; // Berhasil, keluar dari loop
     } catch (err) {
       console.warn(`URL ke-${i + 1} gagal:`, url, err.message);
       if (i === urlsToTry.length - 1) {
+        // Semua gagal
         showLoading(false);
         refreshBtn.classList.remove('spinning');
         document.getElementById('loadingOverlay').classList.remove('hidden');
@@ -151,12 +155,13 @@ async function loadData() {
             <div style="font-size:2.5rem;margin-bottom:16px">⚠️</div>
             <h3 style="color:#f43f5e;margin-bottom:8px">Gagal Memuat Data</h3>
             <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:20px">
-              Browser memblokir akses atau proxy mengalami gangguan saat dibuka dari lingkungan ini.<br><br>
+              Browser memblokir akses ke Google Sheets saat dibuka dari <code style="background:#1a2235;padding:2px 6px;border-radius:4px">file://</code>.<br><br>
               <strong style="color:#f1f5f9">Solusi Tercepat:</strong><br>
-              Pastikan Anda menggunakan koneksi internet yang stabil atau coba nonaktifkan AdBlocker/Brave Shields jika aktif.
+              Upload folder ke <a href="https://app.netlify.com/drop" target="_blank" style="color:#6366f1">Netlify Drop</a> — gratis, drag & drop, online dalam 30 detik.
             </p>
             <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
               <button onclick="loadData()" style="padding:9px 20px;background:#6366f1;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">↻ Coba Lagi</button>
+              <a href="https://app.netlify.com/drop" target="_blank" style="padding:9px 20px;background:#10b981;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;text-decoration:none">🚀 Buka Netlify Drop</a>
             </div>
           </div>`;
       }
@@ -241,24 +246,22 @@ function getStatusBadge(status) {
     open: 'open',
   };
   const cls = map[s] || 'open';
-  return `<span class="badge badge-\${cls}">\${status}</span>`;
+  return `<span class="badge badge-${cls}">${status}</span>`;
 }
 
-// Fixed formatting to prevent backslash escapes inside template literal template string variables
 function getRootCauseBadge(rc) {
   const s = (rc || '').toLowerCase();
   const cls = s === 'system' ? 'system' : s === 'people' ? 'people' : s === 'process' ? 'process' : 'open';
-  return rc ? `<span class="badge badge-\${cls}">\${rc}</span>` : '<span class="badge badge-open">-</span>';
+  return rc ? `<span class="badge badge-${cls}">${rc}</span>` : '<span class="badge badge-open">-</span>';
 }
 
-// Fixed formatting for SLA display
 function getSLADisplay(val) {
   const n = parseSLA(val);
   if (val === 'on progress') return `<span class="sla-progress">On Progress</span>`;
   if (n === null) return `<span class="sla-progress">-</span>`;
-  if (n <= 1) return `<span class="sla-good">\${n}h ✓</span>`;
-  if (n <= 3) return `<span class="sla-warn">\${n}d ⚠</span>`;
-  return `<span class="sla-bad">\${n}d ✗</span>`;
+  if (n <= 1) return `<span class="sla-good">${n}h ✓</span>`;
+  if (n <= 3) return `<span class="sla-warn">${n}d ⚠</span>`;
+  return `<span class="sla-bad">${n}d ✗</span>`;
 }
 
 function countBy(data, key) {
@@ -295,8 +298,8 @@ function renderKPIs() {
   document.getElementById('kpiResolved').textContent = resolved.toLocaleString();
   document.getElementById('kpiOpen').textContent = open.toLocaleString();
   document.getElementById('kpiSla').textContent = avgSLA;
-  document.getElementById('kpiResolvedPct').textContent = total ? `\${Math.round(resolved / total * 100)}%` : '-';
-  document.getElementById('kpiOpenPct').textContent = total ? `\${Math.round(open / total * 100)}%` : '-';
+  document.getElementById('kpiResolvedPct').textContent = total ? `${Math.round(resolved / total * 100)}%` : '-';
+  document.getElementById('kpiOpenPct').textContent = total ? `${Math.round(open / total * 100)}%` : '-';
   document.getElementById('kpiSlaLabel').textContent = slaVals.length ? 'rata-rata' : '-';
 }
 
@@ -811,7 +814,7 @@ function renderTable() {
     return 0;
   });
 
-  tableCountEl.textContent = `\${rows.length} tiket`;
+  tableCountEl.textContent = `${rows.length} tiket`;
   const total = Math.ceil(rows.length / PAGE_SIZE);
   const pageRows = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
@@ -820,15 +823,15 @@ function renderTable() {
     const summary = (r.Summary || '-').length > 55 ? r.Summary.slice(0, 53) + '…' : (r.Summary || '-');
     const cat = (r.Category || '-').length > 25 ? r.Category.slice(0, 23) + '…' : (r.Category || '-');
     return `<tr>
-      <td><strong style="color:var(--accent-primary)">#\${r.Id}</strong></td>
-      <td><span style="color:var(--text-secondary);font-size:0.78rem">\${date}</span></td>
-      <td title="\${r.Summary || ''}">\${summary}</td>
-      <td><span style="font-size:0.78rem">\${cat}</span></td>
-      <td><span style="font-size:0.78rem;color:var(--accent-cyan)">\${r['Product Source'] || '-'}</span></td>
-      <td>\${getStatusBadge(r.Status)}</td>
-      <td>\${getRootCauseBadge(r['Root Cause'])}</td>
-      <td>\${getSLADisplay(r.SLA)}</td>
-      <td><span style="font-size:0.78rem">\${r['Branch Name'] || '-'}</span></td>
+      <td><strong style="color:var(--accent-primary)">#${r.Id}</strong></td>
+      <td><span style="color:var(--text-secondary);font-size:0.78rem">${date}</span></td>
+      <td title="${r.Summary || ''}">${summary}</td>
+      <td><span style="font-size:0.78rem">${cat}</span></td>
+      <td><span style="font-size:0.78rem;color:var(--accent-cyan)">${r['Product Source'] || '-'}</span></td>
+      <td>${getStatusBadge(r.Status)}</td>
+      <td>${getRootCauseBadge(r['Root Cause'])}</td>
+      <td>${getSLADisplay(r.SLA)}</td>
+      <td><span style="font-size:0.78rem">${r['Branch Name'] || '-'}</span></td>
     </tr>`;
   }).join('');
 
@@ -861,9 +864,9 @@ function renderPagination(total) {
   }
 
   paginationEl.innerHTML = `
-    <button class="page-btn" \${currentPage === 1 ? 'disabled' : ''} onclick="goPage(\${currentPage - 1})">‹</button>
-    \${pages.map(p => p === '…' ? `<span class="page-btn" style="cursor:default">…</span>` : `<button class="page-btn \${p === currentPage ? 'active' : ''}" onclick="goPage(\${p})">\${p}</button>`).join('')}
-    <button class="page-btn" \${currentPage === total ? 'disabled' : ''} onclick="goPage(\${currentPage + 1})">›</button>
+    <button class="page-btn" ${currentPage === 1 ? 'disabled' : ''} onclick="goPage(${currentPage - 1})">‹</button>
+    ${pages.map(p => p === '…' ? `<span class="page-btn" style="cursor:default">…</span>` : `<button class="page-btn ${p === currentPage ? 'active' : ''}" onclick="goPage(${p})">${p}</button>`).join('')}
+    <button class="page-btn" ${currentPage === total ? 'disabled' : ''} onclick="goPage(${currentPage + 1})">›</button>
   `;
 }
 
